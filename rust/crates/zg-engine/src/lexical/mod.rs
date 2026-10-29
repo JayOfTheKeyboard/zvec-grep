@@ -879,13 +879,37 @@ fn resolve_path(root: &Path, path: &Path) -> PathBuf {
 ///
 /// The `ignore` crate strips the workspace root from candidates as a byte
 /// prefix, so `<root>/./src/a.rs` would be matched as `./src/a.rs` and miss
-/// `src/**`. Absolute paths are kept as given, as ripgrep keeps them.
+/// `src/**`. Absolute paths are kept as given, as ripgrep keeps them. A
+/// trailing `/` or `/.` is kept, so a file named as a directory still fails
+/// to walk.
 fn resolve_match_path(root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path).components().collect()
+        return path.to_path_buf();
     }
+    let mut resolved: PathBuf = root.join(path).components().collect();
+    // `.`, `./` and `./.` name the root itself, which needs no trailing marker.
+    if !path
+        .components()
+        .any(|component| matches!(component, Component::Normal(_)))
+    {
+        return resolved;
+    }
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let separator_at = |index: usize| {
+        bytes
+            .get(index)
+            .is_some_and(|&byte| std::path::is_separator(byte.into()))
+    };
+    let last = bytes.len() - 1;
+    let marker = if separator_at(last) {
+        std::path::MAIN_SEPARATOR_STR
+    } else if bytes[last] == b'.' && last > 0 && separator_at(last - 1) {
+        if cfg!(windows) { "\\." } else { "/." }
+    } else {
+        ""
+    };
+    resolved.as_mut_os_string().push(marker);
+    resolved
 }
 
 fn is_hard_ignored_path(path: &Path) -> bool {
@@ -1647,6 +1671,7 @@ mod tests {
             (&[][..], "src/**"),
             (&["."][..], "src/**"),
             (&["./"][..], "src/**"),
+            (&["./."][..], "src/**"),
             (&["./src"][..], "src/*.rs"),
             (&["."][..], "!docs/**"),
             (&["./docs", "./src"][..], "!docs/**"),
@@ -1663,7 +1688,7 @@ mod tests {
             let found = reply
                 .matches
                 .iter()
-                .map(|item| item.relative_path.clone())
+                .map(|item| item.relative_path().to_path_buf())
                 .collect::<Vec<_>>();
             if found != [Path::new("src/keep.rs")] {
                 failures.push(format!("paths {paths:?} {rule}: {found:?}"));
