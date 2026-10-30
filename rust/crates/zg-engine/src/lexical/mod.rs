@@ -886,8 +886,17 @@ fn resolve_match_path(root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    let mut resolved: PathBuf = root.join(path).components().collect();
+    // Only the relative input is normalized: the root must keep its exact
+    // spelling (for example a `//` prefix) to match the override root.
+    let relative: PathBuf = path
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect();
     // `.`, `./` and `./.` name the root itself, which needs no trailing marker.
+    if relative.as_os_str().is_empty() {
+        return root.to_path_buf();
+    }
+    let mut resolved = root.join(relative);
     if !path
         .components()
         .any(|component| matches!(component, Component::Normal(_)))

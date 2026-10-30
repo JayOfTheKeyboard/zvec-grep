@@ -279,6 +279,45 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn path_globs_match_inputs_under_a_double_slash_root() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir(workspace.path().join("src")).expect("src dir");
+        std::fs::write(workspace.path().join("src/keep.rs"), "").expect("src file");
+        // `std::path::absolute` keeps exactly two leading slashes on Unix.
+        let root = PathBuf::from(format!("/{}", workspace.path().display()));
+        for (input, pattern, expected) in [
+            ("src", "src/**", 1),
+            ("./src", "src/**", 1),
+            ("src", "!src/**", 0),
+            ("./src", "!src/**", 0),
+        ] {
+            let result = list(FilesOptions {
+                root: Some(root.clone()),
+                paths: vec![PathBuf::from(input)],
+                globs: vec![RgGlob {
+                    pattern: pattern.to_owned(),
+                    case_insensitive: false,
+                }],
+                ..FilesOptions::default()
+            })
+            .await
+            .expect("file listing");
+            assert_eq!(
+                result.paths.len(),
+                expected,
+                "{input} {pattern}: {:?}",
+                result.paths
+            );
+            assert!(
+                result.errors.is_empty(),
+                "{input} {pattern}: {:?}",
+                result.errors
+            );
+        }
+    }
+
     #[tokio::test]
     async fn cancelled_discovery_returns_before_traversal() {
         let signal = tokio_util::sync::CancellationToken::new();
